@@ -42,20 +42,20 @@ class Backend:
             with self.cached_path.open() as f:
                 self.all_samples_dirs = [Path(p) for p in json.load(f)]
         else:
-            self.all_samples_dirs = self.discover_all_samples()
+            self.discover_all_samples()
 
-    def discover_all_samples(self) -> list[Path]:
+    def discover_all_samples(self) -> None:
         """Discover all results folders under `self.results_path`.
 
         Filters results by those containing `self.filter_results_by_existance_of` using rglob.
         """
         if self.results_path is None:
             logger.error("Results path is None")
-            return []
+            return
 
         if not self.results_path.exists():
             logger.error("Results path does not exist: %s", self.results_path)
-            return []
+            return
 
         logger.info("Loading results from %s", self.results_path)
         if self.filter_results_by_existance_of is not None:
@@ -68,7 +68,7 @@ class Backend:
         with self.cached_path.open("w") as f:
             json.dump([p.as_posix() for p in all_samples_folders], f)
 
-        return all_samples_folders
+        self.all_samples_dirs = all_samples_folders
 
     def get_samples_metadata(self, offset: int = 0, limit: int = 10) -> list[dict[str, str]]:
         """Get samples metadata with pagination support.
