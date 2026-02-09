@@ -1,0 +1,13 @@
+app_title: Gradio sample viewer
+launch_options:
+  server_name: 0.0.0.0
+  server_port: 7870
+  show_error: true
+  debug: false
+page_limit: 10
+cache_folder: null
+results_folder: null
+filename: null
+filter_results_by_existance_of: null
+thumbnail_path: ""
+layout: []
