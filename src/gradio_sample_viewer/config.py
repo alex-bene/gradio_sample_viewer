@@ -55,7 +55,7 @@ def _ensure_resolvers_registered() -> None:
         )
 
 
-def load_config(config_path: str | Path) -> GradioConfig:
+def load_config(config_path: str | Path, overrides: list[str] | None = None) -> GradioConfig:
     """Load a GradioConfig from any YAML file path.
 
     The user's config is merged on top of the bundled base_cfg.yaml,
@@ -63,6 +63,8 @@ def load_config(config_path: str | Path) -> GradioConfig:
 
     Args:
         config_path: Path to a YAML configuration file.
+        overrides: Optional OmegaConf dotlist overrides, e.g.
+            ["launch_options.server_port=7878", "page_limit=5"].
 
     Returns:
         A validated GradioConfig instance.
@@ -86,14 +88,17 @@ def load_config(config_path: str | Path) -> GradioConfig:
 
     # Load user's config
     user_cfg = OmegaConf.load(config_path)
+    if user_cfg is None:
+        user_cfg = OmegaConf.create()
 
     # Remove Hydra keys from user config too (if copied from old configs)
     for key in ["defaults", "hydra"]:
         if key in user_cfg:
             del user_cfg[key]
 
-    # Merge: base + user config
-    merged = OmegaConf.merge(base_cfg, user_cfg)
+    # Merge: base + user config + optional CLI overrides
+    cli_cfg = OmegaConf.from_dotlist(overrides or [])
+    merged = OmegaConf.merge(base_cfg, user_cfg, cli_cfg)
 
     # Merge with structured config to enable type conversion
     schema = OmegaConf.structured(GradioConfig)
@@ -103,11 +108,14 @@ def load_config(config_path: str | Path) -> GradioConfig:
     return OmegaConf.to_object(typed_cfg)
 
 
-def launch_viewer(config_path: str | Path, **launch_overrides: Any) -> None:
+def launch_viewer(
+    config_path: str | Path, *, config_overrides: list[str] | None = None, **launch_overrides: Any
+) -> None:
     """Launch the Gradio viewer with configuration from a YAML file.
 
     Args:
         config_path: Path to a YAML configuration file.
+        config_overrides: Optional OmegaConf dotlist overrides for config fields.
         **launch_overrides: Optional overrides for launch options
             (server_name, server_port, share, etc.)
 
@@ -118,7 +126,7 @@ def launch_viewer(config_path: str | Path, **launch_overrides: Any) -> None:
     """
     from .ui import build_demo  # noqa: PLC0415
 
-    cfg = load_config(config_path)
+    cfg = load_config(config_path, overrides=config_overrides)
 
     launch_options = dict(cfg.launch_options)
     launch_options.update(launch_overrides)

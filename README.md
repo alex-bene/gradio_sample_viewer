@@ -32,6 +32,12 @@ Run the viewer with:
 python -m gradio_sample_viewer.app path/to/config.yaml
 ```
 
+CLI overrides are supported via OmegaConf dotlist syntax:
+
+```bash
+uv run gradio-sample-viewer path/to/config.yaml launch_options.server_port=7878 page_limit=20
+```
+
 Or launch it from Python:
 
 ```python
@@ -46,7 +52,7 @@ Example config:
 app_title: My Sample Viewer
 results_folder: /absolute/path/to/results
 filter_results_by_existance_of: must_exist.json
-thumbnail_path: ${first_path_exists:input_image.png,thumbnail.png}
+thumbnail_path: ${first_path_exists:image.png,thumbnail.png}
 thumbnail_max_size: 512
 image_max_size: 1280
 layout:
@@ -55,8 +61,11 @@ layout:
       - type: Column
         scale: 2
         components:
+          - type: Markdown
+            label: Sample ID
+            value: "Current sample: ${sample_folder_name}"
           - type: Image
-            value: input_image.png
+            value: image.png
           - type: Markdown
             label: Action Description
             value:
@@ -67,19 +76,22 @@ layout:
         scale: 3
         components:
           - type: Model3D
-            value: mesh_initial.obj
+            value: ${first_path_exists:mesh.obj,mesh_good.obj,mesh_bad.obj}
 launch_options:
   server_name: 0.0.0.0
   server_port: 7832
 ```
 
 Notes:
-1. `filter_results_by_existance_of` limits samples to those containing a specific file.
-2. `thumbnail_path` can be a single relative path or a `${first_path_exists:...}` resolver to pick the first file that exists per sample folder.
-3. `thumbnail_max_size` and `image_max_size` downsample images to a max side length while preserving aspect ratio.
-4. In `layout`, any `value` paths are resolved relative to each sample folder unless you provide absolute paths.
-5. The sample selector supports multi-select plus special values `all` and `none`.
-6. In a value, if `load_contets` is `true`, then we try to load the contents of the file and, for dicts or pandas dataframes, we optionally select the specified item following the indeces list.
+1. `filter_results_by_existance_of` searches recursively (so subdirectory paths like `predictions/must_exist.json` work), but the sample folder remains the top-level folder under `results_folder` (that is, `results_folder/<sample_id>`), not the matched subdirectory.
+2. `${first_path_exists:...}` is a general path resolver and can be used for any path value (for example `thumbnail_path` or layout `value` paths) to pick the first existing file per sample folder.
+3. `${sample_folder_name}` is replaced with the current sample folder name when rendering each sample layout.
+4. `thumbnail_max_size` and `image_max_size` downsample images to a max side length while preserving aspect ratio.
+5. In `layout`, any `value` paths are resolved relative to the sample folder `results_folder/<sample_id>` unless you provide absolute paths.
+6. The sample selector supports multi-select plus special values `all` and `none`.
+7. `Full samples search` performs a full rescan, temporarily disables its button while running, and refreshes the sample list when complete.
+8. On initial load (and after full refresh), the first discovered sample is selected by default.
+9. In a value, if `load_contents` is `true`, then we try to load the contents of the file and, for dicts or pandas dataframes, we optionally select the specified item following the indices list.
 
 ## Development
 

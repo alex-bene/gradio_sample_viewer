@@ -17,4 +17,4 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: python app.py <config.yaml>")  # noqa: T201
         sys.exit(1)
-    launch_viewer(sys.argv[1])
+    launch_viewer(sys.argv[1], config_overrides=sys.argv[2:])

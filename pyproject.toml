@@ -1,6 +1,6 @@
 [project]
 name = "gradio-sample-viewer"
-version = "0.1.0"
+version = "0.2.0"
 description = "A high-level visualization gradio-based app for quickly showing off results."
 keywords = ["gradio", "visualization", "sample viewer"]
 readme = "README.md"
@@ -17,7 +17,6 @@ dependencies = [
     "omegaconf>=2.3.0",
     "pandas>=2.0.3",
     "plotly>=6.5.2",
-    "typer>=0.21.1",
 ]
 
 [dependency-groups]
