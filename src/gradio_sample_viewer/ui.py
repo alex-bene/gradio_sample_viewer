@@ -32,43 +32,42 @@ def _coerce_selection(selection: str | list[str] | tuple[str, ...] | None) -> li
     return [str(choice) for choice in selection]
 
 
-def normalize_sample_selection(
-    selection: str | list[str] | tuple[str, ...] | None, sample_ids: list[str]
-) -> tuple[list[str], list[str]]:
-    """Normalize dropdown selection and derive active sample ids to render."""
-    values = _coerce_selection(selection)
+def resolve_selection_state(
+    requested_selection: str | list[str] | tuple[str, ...] | None,
+    sample_ids: list[str],
+    *,
+    default_to_first_sample: bool = False,
+) -> tuple[list[str], list[str], str, int | None]:
+    """Resolve dropdown values, selected ids, render token and gallery index."""
+    values = _coerce_selection(requested_selection)
+    if default_to_first_sample and not values and sample_ids:
+        values = [sample_ids[0]]
+
     if SELECT_ALL in values:
-        return [SELECT_ALL], list(sample_ids)
+        return [SELECT_ALL], list(sample_ids), SELECT_ALL, None
     if SELECT_NONE in values:
-        return [SELECT_NONE], []
+        return [SELECT_NONE], [], SELECT_NONE, None
 
     selected_ids = [sample_id for sample_id in values if sample_id in sample_ids]
-    return selected_ids, selected_ids
+    dropdown_values = list(selected_ids)
 
-
-def selection_to_gallery_index(
-    dropdown_values: list[str], selected_ids: list[str], sample_ids: list[str]
-) -> int | None:
-    """Return gallery selected index when exactly one concrete sample id is selected."""
-    if dropdown_values in ([SELECT_ALL], [SELECT_NONE]) or len(selected_ids) != 1:
-        return None
-
-    try:
-        return sample_ids.index(selected_ids[0])
-    except ValueError:
-        return None
-
-
-def selected_ids_to_selection_token(selected_ids: list[str], sample_ids: list[str]) -> str:
-    """Convert selected sample ids to render token based on sample index positions."""
     if not selected_ids:
-        return SELECT_NONE
-    if sample_ids and len(selected_ids) == len(sample_ids):
-        return SELECT_ALL
+        selection_token = SELECT_NONE
+    elif sample_ids and len(selected_ids) == len(sample_ids):
+        selection_token = SELECT_ALL
+    else:
+        index_by_id = {sample_id: idx for idx, sample_id in enumerate(sample_ids)}
+        selected_indices = [str(index_by_id[selected_id]) for selected_id in selected_ids if selected_id in index_by_id]
+        selection_token = SELECT_NONE if not selected_indices else ",".join(selected_indices)
 
-    index_by_id = {sample_id: idx for idx, sample_id in enumerate(sample_ids)}
-    selected_indices = [str(index_by_id[selected_id]) for selected_id in selected_ids if selected_id in index_by_id]
-    return SELECT_NONE if not selected_indices else ",".join(selected_indices)
+    gallery_index = None
+    if len(selected_ids) == 1:
+        try:
+            gallery_index = sample_ids.index(selected_ids[0])
+        except ValueError:
+            gallery_index = None
+
+    return dropdown_values, selected_ids, selection_token, gallery_index
 
 
 def build_demo(cfg: GradioConfig) -> gr.Blocks:  # noqa: PLR0915
@@ -183,13 +182,9 @@ def build_demo(cfg: GradioConfig) -> gr.Blocks:  # noqa: PLR0915
             updated_imgs = samples_imgs + [s["image"] for s in more]
             updated_ids = samples_ids + [s["id"] for s in more]
 
-            requested_selection = samples_dropdown
-            if not _coerce_selection(requested_selection) and not samples_ids and updated_ids:
-                requested_selection = [updated_ids[0]]
-
-            dropdown_values, selected_ids = normalize_sample_selection(requested_selection, updated_ids)
-            selection_token = selected_ids_to_selection_token(selected_ids, updated_ids)
-            gallery_index = selection_to_gallery_index(dropdown_values, selected_ids, updated_ids)
+            dropdown_values, _, selection_token, gallery_index = resolve_selection_state(
+                samples_dropdown, updated_ids, default_to_first_sample=not samples_ids
+            )
 
             return (
                 f"selected_{selection_token}",
@@ -217,14 +212,62 @@ def build_demo(cfg: GradioConfig) -> gr.Blocks:  # noqa: PLR0915
         )
 
         # Re-search for samples
-        search_samples_btn.click(fn=backend.discover_all_samples)
+        def on_refresh_start() -> gr.Button:
+            return gr.Button(value="Full samples search (running...)", interactive=False)
+
+        def refresh_samples_from_scratch(
+            pagination_limit: int,
+        ) -> tuple[str, list[dict[str, Any]], dict[str, gr.Row], list[Any], gr.Gallery, list[str], int, gr.Dropdown]:
+            gr.Info("Running full samples search...", duration=10, title="Refreshing samples")
+            backend.discover_all_samples()
+
+            refreshed_samples = backend.get_samples_metadata(offset=0, limit=int(pagination_limit or cfg.page_limit))
+            refreshed_imgs = [sample["image"] for sample in refreshed_samples]
+            refreshed_ids = [sample["id"] for sample in refreshed_samples]
+            dropdown_values, _, selection_token, gallery_index = resolve_selection_state(
+                None, refreshed_ids, default_to_first_sample=True
+            )
+            gr.Success(
+                f"Full samples search complete: found {len(backend.all_samples_dirs)} samples.",
+                duration=5,
+                title="Samples refreshed",
+            )
+
+            return (
+                f"selected_{selection_token}",
+                refreshed_samples,
+                {},
+                refreshed_imgs,
+                gr.Gallery(value=refreshed_imgs, selected_index=gallery_index),
+                refreshed_ids,
+                len(refreshed_samples),
+                gr.update(choices=[SELECT_ALL, SELECT_NONE, *refreshed_ids], value=dropdown_values),
+            )
+
+        def on_refresh_end() -> gr.Button:
+            return gr.Button(value="Full samples search", interactive=True)
+
+        search_samples_btn.click(fn=on_refresh_start, inputs=[], outputs=[search_samples_btn], queue=False).then(
+            fn=refresh_samples_from_scratch,
+            inputs=[pagination_limit],
+            outputs=[
+                dummy_rerender_text,
+                samples_state,
+                samples_gradio,
+                samples_imgs,
+                gallery,
+                samples_ids,
+                offset_state,
+                samples_dropdown,
+            ],
+            show_progress="hidden",
+            queue=True,
+        ).then(fn=on_refresh_end, inputs=[], outputs=[search_samples_btn], queue=False)
 
         def on_dropdown_change(
             samples_dropdown: str | list[str] | None, samples_ids: list[str]
         ) -> tuple[gr.Dropdown, gr.Gallery, str]:
-            dropdown_values, selected_ids = normalize_sample_selection(samples_dropdown, samples_ids)
-            selection_token = selected_ids_to_selection_token(selected_ids, samples_ids)
-            gallery_index = selection_to_gallery_index(dropdown_values, selected_ids, samples_ids)
+            dropdown_values, _, selection_token, gallery_index = resolve_selection_state(samples_dropdown, samples_ids)
             return (
                 gr.Dropdown(value=dropdown_values),
                 gr.Gallery(selected_index=gallery_index),
@@ -232,12 +275,15 @@ def build_demo(cfg: GradioConfig) -> gr.Blocks:  # noqa: PLR0915
             )
 
         def on_gallery_select(event: gr.SelectData, samples_ids: list[str]) -> tuple[gr.Dropdown, gr.Gallery, str]:
-            if event.index is None or event.index >= len(samples_ids):
+            if not isinstance(event.index, int) or event.index >= len(samples_ids):
                 return gr.skip(), gr.skip(), gr.skip()
+            if not event.selected:
+                return gr.skip(), gr.skip(), gr.skip()
+
             sample_id = samples_ids[event.index]
             return (gr.Dropdown(value=[sample_id]), gr.Gallery(selected_index=event.index), f"selected_{event.index}")
 
-        samples_dropdown.change(
+        samples_dropdown.select(
             fn=on_dropdown_change,
             inputs=[samples_dropdown, samples_ids],
             outputs=[samples_dropdown, gallery, dummy_rerender_text],
