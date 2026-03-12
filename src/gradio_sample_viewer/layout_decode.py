@@ -12,8 +12,10 @@ import gradio as gr
 import pandas as pd
 import plotly.io as pio
 from omegaconf import OmegaConf
+from PIL import Image
 
 from .config import GradioConfig
+from .image_utils import load_resized_image, resize_image_max_side
 
 
 @lru_cache
@@ -36,11 +38,11 @@ def load_file(filepath: str | Path) -> Any:
 def get_first_path_exists(path_candidates: list[str | Path], sample_folder: Path) -> str | Path:
     """Get the first path that exists in a list of `path_candidates` relative to `sample_folder`."""
     for path in path_candidates:
-        full_path = Path(path)
+        candidate_path = Path(path)
         # If path is not absolute, assume it is relative to sample_folder
-        full_path = sample_folder / path if not full_path.is_absolute() else Path(path)
+        full_path = sample_folder / candidate_path if not candidate_path.is_absolute() else candidate_path
         if full_path.exists():
-            return full_path
+            return candidate_path if not candidate_path.is_absolute() else full_path
 
     return path_candidates[0]
 
@@ -125,7 +127,9 @@ def prepare_layout_components(cfg: GradioConfig, folder_name: str) -> list:
     return load_layout_files(layout, folder_name, cfg.results_folder)
 
 
-def create_gradio_component_by_name(name: str, sample_folder: Path | str | None = None, **kwargs: dict) -> gr.Component:
+def create_gradio_component_by_name(
+    name: str, sample_folder: Path | str | None = None, image_max_size: int = 1280, **kwargs: dict
+) -> gr.Component:
     """Create Gradio component based on name and kwargs."""
 
     # Since paths are assumed to be relative to sample_folder, we need to change the working directory to be the
@@ -145,6 +149,19 @@ def create_gradio_component_by_name(name: str, sample_folder: Path | str | None 
         candidate = Path(sample_folder) / path_value
         return candidate if candidate.exists() else value
 
+    def _prepare_image_value(value: Any, sample_folder: Path | str | None, max_size: int) -> Any:
+        resolved_value = _resolve_relative_path(value, sample_folder)
+        if not isinstance(resolved_value, (Path, Image.Image)):
+            return value
+        if isinstance(value, Image.Image):
+            return resize_image_max_side(value, max_size)
+        image_path = resolved_value
+
+        if not image_path.exists():
+            return value
+
+        return load_resized_image(image_path, max_size)
+
     current_working_dir = Path.cwd()
     if sample_folder is not None:
         sample_folder = Path(sample_folder)
@@ -152,6 +169,8 @@ def create_gradio_component_by_name(name: str, sample_folder: Path | str | None 
 
     if "value" in kwargs:
         kwargs["value"] = _resolve_relative_path(kwargs["value"], sample_folder)
+        if name == "Image":
+            kwargs["value"] = _prepare_image_value(kwargs["value"], sample_folder, image_max_size)
 
     if name == "Plot":
         value = kwargs.pop("value")
@@ -166,20 +185,24 @@ def create_gradio_component_by_name(name: str, sample_folder: Path | str | None 
     return component
 
 
-def make_gradio_components(layout: list | dict, sample_folder: Path | str | None = None) -> None:
+def make_gradio_components(
+    layout: list | dict, sample_folder: Path | str | None = None, image_max_size: int = 1280
+) -> None:
     """Recursively create Gradio components from layout configuration."""
     if isinstance(layout, dict) and "components" in layout:
         components = layout.pop("components")
         name = layout.pop("type")
-        with_context = create_gradio_component_by_name(name, sample_folder=sample_folder, **layout)
+        with_context = create_gradio_component_by_name(
+            name, sample_folder=sample_folder, image_max_size=image_max_size, **layout
+        )
         with with_context:
-            make_gradio_components(components, sample_folder)
+            make_gradio_components(components, sample_folder, image_max_size=image_max_size)
     elif isinstance(layout, list):
         for component in layout:
-            make_gradio_components(component, sample_folder)
+            make_gradio_components(component, sample_folder, image_max_size=image_max_size)
     else:
         name = layout.pop("type")
-        create_gradio_component_by_name(name, sample_folder=sample_folder, **layout)
+        create_gradio_component_by_name(name, sample_folder=sample_folder, image_max_size=image_max_size, **layout)
 
 
 if __name__ == "__main__":

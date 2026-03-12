@@ -47,6 +47,8 @@ app_title: My Sample Viewer
 results_folder: /absolute/path/to/results
 filter_results_by_existance_of: must_exist.json
 thumbnail_path: ${first_path_exists:input_image.png,thumbnail.png}
+thumbnail_max_size: 512
+image_max_size: 1280
 layout:
   - type: Row
     components:
@@ -74,8 +76,10 @@ launch_options:
 Notes:
 1. `filter_results_by_existance_of` limits samples to those containing a specific file.
 2. `thumbnail_path` can be a single relative path or a `${first_path_exists:...}` resolver to pick the first file that exists per sample folder.
-3. In `layout`, any `value` paths are resolved relative to each sample folder unless you provide absolute paths.
-4. In a value, if `load_contets` is `true`, then we try to load the contents of the file and, for dicts or pandas dataframes, we optionally select the specified item following the indeces list.
+3. `thumbnail_max_size` and `image_max_size` downsample images to a max side length while preserving aspect ratio.
+4. In `layout`, any `value` paths are resolved relative to each sample folder unless you provide absolute paths.
+5. The sample selector supports multi-select plus special values `all` and `none`.
+6. In a value, if `load_contets` is `true`, then we try to load the contents of the file and, for dicts or pandas dataframes, we optionally select the specified item following the indeces list.
 
 ## Development
 

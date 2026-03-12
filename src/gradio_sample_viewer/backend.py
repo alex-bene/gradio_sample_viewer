@@ -8,9 +8,12 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .image_utils import load_resized_image
 from .layout_decode import get_first_path_exists
 
 if TYPE_CHECKING:
+    from PIL.Image import Image
+
     from .config import GradioConfig
 
 
@@ -25,6 +28,7 @@ class Backend:
         self.results_path = config.results_folder
         self.project_root = project_root
         self.thumbnail_path = config.thumbnail_path
+        self.thumbnail_max_size = config.thumbnail_max_size
         self.filter_results_by_existance_of = config.filter_results_by_existance_of
         self.cached_path = (
             config.cache_folder if config.cache_folder is not None else Path.home() / ".cache" / "gradio_sample_viewer"
@@ -70,7 +74,7 @@ class Backend:
 
         self.all_samples_dirs = all_samples_folders
 
-    def get_samples_metadata(self, offset: int = 0, limit: int = 10) -> list[dict[str, str]]:
+    def get_samples_metadata(self, offset: int = 0, limit: int = 10) -> list[dict[str, str | tuple[Image, str]]]:
         """Get samples metadata with pagination support.
 
         Args:
@@ -84,12 +88,29 @@ class Backend:
         try:
             results: list[dict] = []
             for sample_dir in self.all_samples_dirs[offset : offset + limit]:
-                thumbnail_path = self.thumbnail_path
-                if not isinstance(self.thumbnail_path, str):
-                    thumbnail_path = get_first_path_exists(self.thumbnail_path["first_path_exists"], sample_dir)
-                results.append({"id": sample_dir.name, "image": (thumbnail_path, sample_dir.name)})
+                sample_metadata = self._build_sample_metadata(sample_dir)
+                if sample_metadata is not None:
+                    results.append(sample_metadata)
         except Exception:
             logger.exception("Error listing samples")
             return []
         else:
             return results
+
+    def _build_sample_metadata(self, sample_dir: Path) -> dict[str, str | tuple[Image, str]] | None:
+        """Build metadata for one sample, returning None when thumbnail loading fails."""
+        try:
+            thumbnail_path = self.thumbnail_path
+            if not isinstance(self.thumbnail_path, (str, Path)):
+                thumbnail_path = get_first_path_exists(self.thumbnail_path["first_path_exists"], sample_dir)
+
+            thumbnail_file = Path(thumbnail_path)
+            if not thumbnail_file.is_absolute():
+                thumbnail_file = sample_dir / thumbnail_file
+
+            thumbnail_image = load_resized_image(thumbnail_file, self.thumbnail_max_size)
+        except Exception:
+            logger.exception("Error loading thumbnail for sample: %s", sample_dir)
+            return None
+        else:
+            return {"id": sample_dir.name, "image": (thumbnail_image, sample_dir.name)}

@@ -17,6 +17,8 @@ class GradioConfig:
     results_folder: Path | None
     layout: list
     thumbnail_path: Any
+    thumbnail_max_size: int = 512
+    image_max_size: int = 1280
     filter_results_by_existance_of: str | None = None
     filename: str | None = None
     app_title: str = "Samples viewer"
@@ -35,6 +37,12 @@ class GradioConfig:
         ):
             msg = "`thumbnail_path` must be a string."
             raise TypeError(msg)
+        if self.thumbnail_max_size <= 0:
+            msg = "`thumbnail_max_size` must be a positive integer."
+            raise ValueError(msg)
+        if self.image_max_size <= 0:
+            msg = "`image_max_size` must be a positive integer."
+            raise ValueError(msg)
 
 
 def _ensure_resolvers_registered() -> None:
