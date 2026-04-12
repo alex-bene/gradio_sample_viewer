@@ -81,7 +81,7 @@ def maybe_notify_load_more_empty(existing_sample_ids: list[str], new_samples: li
     if new_samples:
         return
     if existing_sample_ids:
-        gr.Warning("No more samples are available to load.", title="No more samples")
+        gr.Warning("No more samples are available to load.", title="No more samples", duration=5)
         return
     gr.Warning("No samples were found in the results folder.", title="No samples found")
 
@@ -132,8 +132,8 @@ def build_demo(cfg: GradioConfig) -> gr.Blocks:  # noqa: PLR0915
                 selected_ids_set = set(selected_ids)
                 for sample_id, sample_gradio in samples_gradio.items():
                     sample_gradio.visible = sample_id in selected_ids_set
-                    if (sample_id in selected_ids_set) and (not sample_gradio.is_rendered):
-                        sample_gradio.render()
+                    if sample_id in selected_ids_set:
+                        sample_gradio.unrender().render()
 
             def create_samples_rows(samples: list[dict], samples_gradio: dict[str, gr.Row]) -> dict[str, gr.Row]:
                 if cfg.results_folder is None:
@@ -232,7 +232,7 @@ def build_demo(cfg: GradioConfig) -> gr.Blocks:  # noqa: PLR0915
                 offset_state,
                 samples_dropdown,
             ],
-            queue=False,
+            queue=True,
         )
 
         # Re-search for samples
