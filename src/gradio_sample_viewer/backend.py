@@ -20,6 +20,25 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _dedupe_paths_in_order(paths: list[Path]) -> list[Path]:
+    """Return paths without duplicates while preserving discovery order."""
+    deduped_paths: list[Path] = []
+    seen_paths: set[Path] = set()
+
+    for path in paths:
+        if path in seen_paths:
+            continue
+        seen_paths.add(path)
+        deduped_paths.append(path)
+
+    return deduped_paths
+
+
+def _relative_sample_id(results_path: Path, sample_dir: Path) -> str:
+    """Return a stable sample id relative to the configured results root."""
+    return sample_dir.relative_to(results_path).as_posix()
+
+
 class Backend:
     """Filesystem and metadata helpers for the Gradio demo."""
 
@@ -30,12 +49,18 @@ class Backend:
         self.thumbnail_path = config.thumbnail_path
         self.thumbnail_max_size = config.thumbnail_max_size
         self.filter_results_by_existance_of = config.filter_results_by_existance_of
+        self.filter_results_parents_up = config.filter_results_parents_up
+        self.all_samples_dirs: list[Path] = []
         self.cached_path = (
             config.cache_folder if config.cache_folder is not None else Path.home() / ".cache" / "gradio_sample_viewer"
         )
         results_path_hash = (
             hashlib.sha256(
-                (self.results_path.as_posix() + (self.filter_results_by_existance_of or "")).encode()
+                (
+                    self.results_path.as_posix()
+                    + (self.filter_results_by_existance_of or "")
+                    + str(self.filter_results_parents_up)
+                ).encode()
             ).hexdigest()
             if self.results_path is not None
             else "null"
@@ -63,9 +88,8 @@ class Backend:
 
         logger.info("Loading results from %s", self.results_path)
         if self.filter_results_by_existance_of is not None:
-            all_samples = sorted(self.results_path.rglob(self.filter_results_by_existance_of))
-            all_samples_rel_path = [p.relative_to(self.results_path) for p in all_samples]
-            all_samples_folders = [self.results_path / p.parts[0] for p in all_samples_rel_path]
+            all_matches = sorted(self.results_path.rglob(self.filter_results_by_existance_of))
+            all_samples_folders = _dedupe_paths_in_order([self._resolve_sample_dir(match) for match in all_matches])
         else:
             all_samples_folders = sorted(self.results_path.iterdir())
         logger.info("Found %d samples", len(all_samples_folders))
@@ -74,7 +98,30 @@ class Backend:
 
         self.all_samples_dirs = all_samples_folders
 
-    def get_samples_metadata(self, offset: int = 0, limit: int = 10) -> list[dict[str, str | tuple[Image, str]]]:
+    def _resolve_sample_dir(self, match_path: Path) -> Path:
+        """Resolve the sample directory from a matched filter file path."""
+        if self.results_path is None:
+            msg = "Results path is None."
+            raise ValueError(msg)
+
+        sample_dir = match_path.parent
+        for _ in range(self.filter_results_parents_up):
+            sample_dir = sample_dir.parent
+
+        try:
+            _relative_sample_id(self.results_path, sample_dir)
+        except ValueError as exc:
+            msg = (
+                f"`filter_results_parents_up={self.filter_results_parents_up}` climbs above results_folder "
+                f"for match {match_path}."
+            )
+            raise ValueError(msg) from exc
+
+        return sample_dir
+
+    def get_samples_metadata(
+        self, offset: int = 0, limit: int = 10
+    ) -> tuple[list[dict[str, str | tuple[Image, str]]], int]:
         """Get samples metadata with pagination support.
 
         Args:
@@ -82,20 +129,21 @@ class Backend:
             limit (int, optional): Limit for pagination. Defaults to 10.
 
         Returns:
-            list[dict]: List of sample metadata dictionaries containing "id" (str) and "image" (Path) keys.
+            tuple[list[dict], int]: Successful sample metadata rows plus source entries consumed.
 
         """
+        source_dirs = self.all_samples_dirs[offset : offset + limit]
         try:
             results: list[dict] = []
-            for sample_dir in self.all_samples_dirs[offset : offset + limit]:
+            for sample_dir in source_dirs:
                 sample_metadata = self._build_sample_metadata(sample_dir)
                 if sample_metadata is not None:
                     results.append(sample_metadata)
         except Exception:
             logger.exception("Error listing samples")
-            return []
+            return [], len(source_dirs)
         else:
-            return results
+            return results, len(source_dirs)
 
     def _build_sample_metadata(self, sample_dir: Path) -> dict[str, str | tuple[Image, str]] | None:
         """Build metadata for one sample, returning None when thumbnail loading fails."""
@@ -113,4 +161,8 @@ class Backend:
             logger.exception("Error loading thumbnail for sample: %s", sample_dir)
             return None
         else:
-            return {"id": sample_dir.name, "image": (thumbnail_image, sample_dir.name)}
+            if self.results_path is None:
+                msg = "Results path is None."
+                raise ValueError(msg)
+            sample_id = _relative_sample_id(self.results_path, sample_dir)
+            return {"id": sample_id, "image": (thumbnail_image, sample_id)}

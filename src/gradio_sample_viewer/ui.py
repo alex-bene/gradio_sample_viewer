@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 import gradio as gr
 
@@ -70,6 +71,27 @@ def resolve_selection_state(
     return dropdown_values, selected_ids, selection_token, gallery_index
 
 
+def _new_render_trigger(prefix: str) -> str:
+    """Generate a unique render trigger so gr.render runs on every UI event."""
+    return f"{prefix}_{uuid4().hex}"
+
+
+def maybe_notify_load_more_empty(existing_sample_ids: list[str], new_samples: list[dict[str, Any]]) -> None:
+    """Show a modal when load-more yields nothing useful."""
+    if new_samples:
+        return
+    if existing_sample_ids:
+        gr.Warning("No more samples are available to load.", title="No more samples")
+        return
+    gr.Warning("No samples were found in the results folder.", title="No samples found")
+
+
+def maybe_notify_refresh_empty(discovered_sample_count: int, loaded_sample_count: int) -> None:
+    """Show a modal when a full refresh still leaves the UI empty."""
+    if discovered_sample_count == 0 or loaded_sample_count == 0:
+        gr.Warning("No samples were found in the results folder.", title="No samples found")
+
+
 def build_demo(cfg: GradioConfig) -> gr.Blocks:  # noqa: PLR0915
     """Build the Gradio demo app."""
     demo = gr.Blocks(title=cfg.app_title)
@@ -80,6 +102,7 @@ def build_demo(cfg: GradioConfig) -> gr.Blocks:  # noqa: PLR0915
         samples_gradio = gr.State({})
         samples_imgs = gr.State([])
         samples_ids = gr.State([])
+        selected_ids_state = gr.State([])
         offset_state = gr.State(0)
 
         gr.Markdown("# HOIGen results viewer")
@@ -92,55 +115,43 @@ def build_demo(cfg: GradioConfig) -> gr.Blocks:  # noqa: PLR0915
             dummy_rerender_text.change(lambda: "", inputs=[], outputs=dummy_rerender_text)
 
             @gr.render(
-                inputs=[samples_state, samples_gradio, dummy_rerender_text],
+                inputs=[samples_state, samples_gradio, selected_ids_state, dummy_rerender_text],
                 triggers=[dummy_rerender_text.change],
                 trigger_mode="once",
             )
             def render_samples(
-                samples_state: list[dict], samples_gradio: dict[str, gr.Row], dummy_rerender_text: str
+                samples_state: list[dict],
+                samples_gradio: dict[str, gr.Row],
+                selected_ids: list[str],
+                dummy_rerender_text: str,
             ) -> None:
-                for sample_gradio in samples_gradio.values():
-                    sample_gradio.unrender().render()
-
-                if dummy_rerender_text == "rerender":
-                    samples_gradio = create_samples_rows(samples=samples_state, samples_gradio=samples_gradio)
-                    return
-
-                if not dummy_rerender_text.startswith("selected_"):
-                    return
-
                 samples_gradio = create_samples_rows(samples=samples_state, samples_gradio=samples_gradio)
-                selected_token = dummy_rerender_text.rsplit("_", maxsplit=1)[-1]
-                if selected_token == SELECT_ALL:
-                    selected_indices = set(range(len(samples_gradio)))
-                elif selected_token == SELECT_NONE:
-                    selected_indices = set()
-                else:
-                    selected_indices = {
-                        int(selected_index) for selected_index in selected_token.split(",") if selected_index.isdigit()
-                    }
+                if not dummy_rerender_text:
+                    return
 
-                for idx, sample_gradio in enumerate(samples_gradio.values()):
-                    sample_gradio.visible = idx in selected_indices
-                    if idx not in selected_indices:
-                        sample_gradio.unrender()
+                selected_ids_set = set(selected_ids)
+                for sample_id, sample_gradio in samples_gradio.items():
+                    sample_gradio.visible = sample_id in selected_ids_set
+                    if (sample_id in selected_ids_set) and (not sample_gradio.is_rendered):
+                        sample_gradio.render()
 
             def create_samples_rows(samples: list[dict], samples_gradio: dict[str, gr.Row]) -> dict[str, gr.Row]:
                 if cfg.results_folder is None:
                     return samples_gradio
 
                 for sample in samples:
-                    if sample.get("id") in samples_gradio:
+                    sample_id = str(sample.get("id"))
+                    if sample_id in samples_gradio:
                         continue
 
-                    with gr.Column(variant="panel", key=sample.get("id")) as sample_gradio:
-                        gr.Markdown(f"### {sample.get('id', '')}")
+                    with gr.Column(variant="panel", key=sample_id, render=False, visible=False) as sample_gradio:
+                        gr.Markdown(f"### {sample_id}")
                         make_gradio_components(
-                            prepare_layout_components(cfg, sample.get("id")),
-                            cfg.results_folder / sample["id"],
+                            prepare_layout_components(cfg, sample_id),
+                            cfg.results_folder / Path(sample_id),
                             image_max_size=cfg.image_max_size,
                         )
-                        samples_gradio[sample.get("id")] = sample_gradio
+                        samples_gradio[sample_id] = sample_gradio
                 return samples_gradio
 
         # Pagination settings, samples loading and sample selector
@@ -171,40 +182,53 @@ def build_demo(cfg: GradioConfig) -> gr.Blocks:  # noqa: PLR0915
             samples_state: list[dict[str, Any]],
             samples_imgs: list[Any],
             samples_ids: list[str],
+            selected_ids_state: list[str],
             samples_dropdown: str | list[str] | None,
             offset_state: int,
             pagination_limit: int,
-        ) -> tuple[str, list[dict[str, Any]], list[Any], gr.Gallery, list[str], int, gr.Dropdown]:
-            more = backend.get_samples_metadata(
+        ) -> tuple[str, list[dict[str, Any]], list[Any], gr.Gallery, list[str], list[str], int, gr.Dropdown]:
+            more, consumed_count = backend.get_samples_metadata(
                 offset=int(offset_state or 0), limit=int(pagination_limit or cfg.page_limit)
             )
+            maybe_notify_load_more_empty(samples_ids, more)
             updated_samples_state = samples_state + more
             updated_imgs = samples_imgs + [s["image"] for s in more]
             updated_ids = samples_ids + [s["id"] for s in more]
+            requested_selection = samples_dropdown if samples_dropdown is not None else selected_ids_state
 
-            dropdown_values, _, selection_token, gallery_index = resolve_selection_state(
-                samples_dropdown, updated_ids, default_to_first_sample=not samples_ids
+            dropdown_values, selected_ids, _, gallery_index = resolve_selection_state(
+                requested_selection, updated_ids, default_to_first_sample=not samples_ids
             )
 
             return (
-                f"selected_{selection_token}",
+                _new_render_trigger("load_more"),
                 updated_samples_state,
                 updated_imgs,
                 gr.Gallery(value=updated_imgs, selected_index=gallery_index),
                 updated_ids,
-                offset_state + len(more),
+                selected_ids,
+                offset_state + consumed_count,
                 gr.update(choices=[SELECT_ALL, SELECT_NONE, *updated_ids], value=dropdown_values),
             )
 
         load_more_btn.click(
             fn=load_more,
-            inputs=[samples_state, samples_imgs, samples_ids, samples_dropdown, offset_state, pagination_limit],
+            inputs=[
+                samples_state,
+                samples_imgs,
+                samples_ids,
+                selected_ids_state,
+                samples_dropdown,
+                offset_state,
+                pagination_limit,
+            ],
             outputs=[
                 dummy_rerender_text,
                 samples_state,
                 samples_imgs,
                 gallery,
                 samples_ids,
+                selected_ids_state,
                 offset_state,
                 samples_dropdown,
             ],
@@ -217,14 +241,18 @@ def build_demo(cfg: GradioConfig) -> gr.Blocks:  # noqa: PLR0915
 
         def refresh_samples_from_scratch(
             pagination_limit: int,
-        ) -> tuple[str, list[dict[str, Any]], dict[str, gr.Row], list[Any], gr.Gallery, list[str], int, gr.Dropdown]:
+        ) -> tuple[
+            str, list[dict[str, Any]], dict[str, gr.Row], list[Any], gr.Gallery, list[str], list[str], int, gr.Dropdown
+        ]:
             gr.Info("Running full samples search...", duration=10, title="Refreshing samples")
             backend.discover_all_samples()
 
-            refreshed_samples = backend.get_samples_metadata(offset=0, limit=int(pagination_limit or cfg.page_limit))
+            refreshed_samples, consumed_count = backend.get_samples_metadata(
+                offset=0, limit=int(pagination_limit or cfg.page_limit)
+            )
             refreshed_imgs = [sample["image"] for sample in refreshed_samples]
             refreshed_ids = [sample["id"] for sample in refreshed_samples]
-            dropdown_values, _, selection_token, gallery_index = resolve_selection_state(
+            dropdown_values, selected_ids, _, gallery_index = resolve_selection_state(
                 None, refreshed_ids, default_to_first_sample=True
             )
             gr.Success(
@@ -232,15 +260,19 @@ def build_demo(cfg: GradioConfig) -> gr.Blocks:  # noqa: PLR0915
                 duration=5,
                 title="Samples refreshed",
             )
+            maybe_notify_refresh_empty(
+                discovered_sample_count=len(backend.all_samples_dirs), loaded_sample_count=len(refreshed_samples)
+            )
 
             return (
-                f"selected_{selection_token}",
+                _new_render_trigger("refresh"),
                 refreshed_samples,
                 {},
                 refreshed_imgs,
                 gr.Gallery(value=refreshed_imgs, selected_index=gallery_index),
                 refreshed_ids,
-                len(refreshed_samples),
+                selected_ids,
+                consumed_count,
                 gr.update(choices=[SELECT_ALL, SELECT_NONE, *refreshed_ids], value=dropdown_values),
             )
 
@@ -257,6 +289,7 @@ def build_demo(cfg: GradioConfig) -> gr.Blocks:  # noqa: PLR0915
                 samples_imgs,
                 gallery,
                 samples_ids,
+                selected_ids_state,
                 offset_state,
                 samples_dropdown,
             ],
@@ -266,33 +299,41 @@ def build_demo(cfg: GradioConfig) -> gr.Blocks:  # noqa: PLR0915
 
         def on_dropdown_change(
             samples_dropdown: str | list[str] | None, samples_ids: list[str]
-        ) -> tuple[gr.Dropdown, gr.Gallery, str]:
-            dropdown_values, _, selection_token, gallery_index = resolve_selection_state(samples_dropdown, samples_ids)
+        ) -> tuple[gr.Dropdown, gr.Gallery, str, list[str]]:
+            dropdown_values, selected_ids, _, gallery_index = resolve_selection_state(samples_dropdown, samples_ids)
             return (
                 gr.Dropdown(value=dropdown_values),
                 gr.Gallery(selected_index=gallery_index),
-                f"selected_{selection_token}",
+                _new_render_trigger("dropdown"),
+                selected_ids,
             )
 
-        def on_gallery_select(event: gr.SelectData, samples_ids: list[str]) -> tuple[gr.Dropdown, gr.Gallery, str]:
+        def on_gallery_select(
+            event: gr.SelectData, samples_ids: list[str]
+        ) -> tuple[gr.Dropdown, gr.Gallery, str, list[str]]:
             if not isinstance(event.index, int) or event.index >= len(samples_ids):
-                return gr.skip(), gr.skip(), gr.skip()
+                return gr.skip(), gr.skip(), gr.skip(), gr.skip()
             if not event.selected:
-                return gr.skip(), gr.skip(), gr.skip()
+                return gr.skip(), gr.skip(), gr.skip(), gr.skip()
 
             sample_id = samples_ids[event.index]
-            return (gr.Dropdown(value=[sample_id]), gr.Gallery(selected_index=event.index), f"selected_{event.index}")
+            return (
+                gr.Dropdown(value=[sample_id]),
+                gr.Gallery(selected_index=event.index),
+                _new_render_trigger("gallery"),
+                [sample_id],
+            )
 
         samples_dropdown.select(
             fn=on_dropdown_change,
             inputs=[samples_dropdown, samples_ids],
-            outputs=[samples_dropdown, gallery, dummy_rerender_text],
+            outputs=[samples_dropdown, gallery, dummy_rerender_text, selected_ids_state],
             queue=False,
         )
         gallery.select(
             fn=on_gallery_select,
             inputs=[samples_ids],
-            outputs=[samples_dropdown, gallery, dummy_rerender_text],
+            outputs=[samples_dropdown, gallery, dummy_rerender_text, selected_ids_state],
             queue=False,
         )
 

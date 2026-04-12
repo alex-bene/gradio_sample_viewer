@@ -9,6 +9,7 @@ cache_folder: null
 results_folder: null
 filename: null
 filter_results_by_existance_of: null
+filter_results_parents_up: 0
 thumbnail_path: ""
 thumbnail_max_size: 512
 image_max_size: 1280

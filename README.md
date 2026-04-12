@@ -52,6 +52,7 @@ Example config:
 app_title: My Sample Viewer
 results_folder: /absolute/path/to/results
 filter_results_by_existance_of: must_exist.json
+filter_results_parents_up: 0
 thumbnail_path: ${first_path_exists:image.png,thumbnail.png}
 thumbnail_max_size: 512
 image_max_size: 1280
@@ -83,15 +84,16 @@ launch_options:
 ```
 
 Notes:
-1. `filter_results_by_existance_of` searches recursively (so subdirectory paths like `predictions/must_exist.json` work), but the sample folder remains the top-level folder under `results_folder` (that is, `results_folder/<sample_id>`), not the matched subdirectory.
-2. `${first_path_exists:...}` is a general path resolver and can be used for any path value (for example `thumbnail_path` or layout `value` paths) to pick the first existing file per sample folder.
-3. `${sample_folder_name}` is replaced with the current sample folder name when rendering each sample layout.
-4. `thumbnail_max_size` and `image_max_size` downsample images to a max side length while preserving aspect ratio.
-5. In `layout`, any `value` paths are resolved relative to the sample folder `results_folder/<sample_id>` unless you provide absolute paths.
-6. The sample selector supports multi-select plus special values `all` and `none`.
-7. `Full samples search` performs a full rescan, temporarily disables its button while running, and refreshes the sample list when complete.
-8. On initial load (and after full refresh), the first discovered sample is selected by default.
-9. In a value, if `load_contents` is `true`, then we try to load the contents of the file and, for dicts or pandas dataframes, we optionally select the specified item following the indices list.
+1. `filter_results_by_existance_of` searches recursively. The sample folder is the folder where the match is found, optionally climbed upward by `filter_results_parents_up` parent steps. Example: if `vis_refined.json` is found at `dir1/dir2/dir3/vis_refined.json`, then `filter_results_parents_up: 0` selects `dir1/dir2/dir3`, while `filter_results_parents_up: 2` selects `dir1`.
+2. Discovered sample ids are shown as paths relative to `results_folder` (for example `dir1/dir2`) so nested sample folders stay unique.
+3. `${first_path_exists:...}` is a general path resolver and can be used for any path value (for example `thumbnail_path` or layout `value` paths) to pick the first existing file per sample folder.
+4. `${sample_folder_name}` is replaced with the current sample folder path relative to `results_folder` when rendering each sample layout.
+5. `thumbnail_max_size` and `image_max_size` downsample images to a max side length while preserving aspect ratio.
+6. In `layout`, any `value` paths are resolved relative to the selected sample folder unless you provide absolute paths.
+7. The sample selector supports multi-select plus special values `all` and `none`.
+8. `Full samples search` performs a full rescan, temporarily disables its button while running, and refreshes the sample list when complete.
+9. On initial load (and after full refresh), the first discovered sample is selected by default.
+10. In a value, if `load_contents` is `true`, then we try to load the contents of the file and, for dicts or pandas dataframes, we optionally select the specified item following the indices list.
 
 ## Development
 

@@ -20,6 +20,7 @@ class GradioConfig:
     thumbnail_max_size: int = 512
     image_max_size: int = 1280
     filter_results_by_existance_of: str | None = None
+    filter_results_parents_up: int = 0
     filename: str | None = None
     app_title: str = "Samples viewer"
     page_limit: int = 10
@@ -42,6 +43,9 @@ class GradioConfig:
             raise ValueError(msg)
         if self.image_max_size <= 0:
             msg = "`image_max_size` must be a positive integer."
+            raise ValueError(msg)
+        if self.filter_results_parents_up < 0:
+            msg = "`filter_results_parents_up` must be a non-negative integer."
             raise ValueError(msg)
 
 
